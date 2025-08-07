@@ -1,4 +1,5 @@
 import random
+import matplotlib.pyplot as plt
 
 class Rule:
     def __init__(self, condition1_pos, condition1_state, condition2_pos, condition2_state, action):
@@ -211,12 +212,16 @@ class Agent:
         self.unique_positions = set()
         self.score = 0
 
-        # Create more rules with better coverage - 501
-        self.ensemble = Rule.create_k_rules(501)
+        # Create more rules with better coverage
+        # it will create rules if its stumped so these are not fixed
+        self.ensemble = Rule.create_k_rules(11)
         
         # Add some guaranteed basic rules for better coverage
         self._add_basic_survival_rules()
-        
+
+        # Track rule activation counts (only for rules that activate)
+        self.rule_activation_counts = {}  # key: rule index, value: count
+
     def _add_basic_survival_rules(self):
         """Add basic rules that should almost always have some match."""
         # Always try to move away from walls if possible
@@ -260,10 +265,15 @@ class Agent:
         action_votes = {'NORTH': 0, 'SOUTH': 0, 'EAST': 0, 'WEST': 0}
         matching_rules_count = 0
 
-        for rule in self.ensemble:
+        for idx, rule in enumerate(self.ensemble):
             if rule.matches(self.row, self.col, self.maze):
                 action_votes[rule.get_action()] += 1
                 matching_rules_count += 1
+                # Track activation count for this rule
+                if idx in self.rule_activation_counts:
+                    self.rule_activation_counts[idx] += 1
+                else:
+                    self.rule_activation_counts[idx] = 1
 
         if matching_rules_count == 0:
             # Fallback 1: Try simple heuristic - move away from walls
@@ -348,41 +358,52 @@ class Agent:
         """Run the agent for a specified number of steps, tracking positions."""
         print(f"Starting run for {n_steps} steps...")
         stuck_count = 0
-        
+        print_details = False
+
+        # Reset rule activation counts before each run
+        self.rule_activation_counts.clear()
+
         for step in range(n_steps):
-            print(f"\nStep {step + 1}:")
-            print(f"  Current position: ({self.row}, {self.col})")
+            if print_details:
+                print(f"\nStep {step + 1}:")
+                print(f"  Current position: ({self.row}, {self.col})")
 
             # Decide action
             decision_result = self.decide_action()
             
             if decision_result is None:
-                print("  No valid moves available - truly stuck!")
+                if print_details:
+                    print("  No valid moves available - truly stuck!")
                 stuck_count += 1
             else:
                 chosen_action, votes = decision_result
                 # Check if this was a heuristic decision (low vote counts indicate heuristic)
-                total_votes = sum(votes.values())
-                if total_votes <= 4:  # Likely a heuristic decision
-                    print(f"  Heuristic action: {chosen_action} (scores: {votes})")
-                else:
-                    print(f"  Decided action: {chosen_action} (votes: {votes})")
+                if print_details:
+                    total_votes = sum(votes.values())
+                    if total_votes <= 4:  # Likely a heuristic decision
+                        print(f"  Heuristic action: {chosen_action} (scores: {votes})")
+                    else:
+                        print(f"  Decided action: {chosen_action} (votes: {votes})")
             
             # Try to move
             if decision_result and chosen_action:
                 if self.move(chosen_action):
-                    print(f"  Moved successfully to ({self.row}, {self.col})")
+                    if print_details:
+                        print(f"  Moved successfully to ({self.row}, {self.col})")
                     stuck_count = 0  # Reset stuck counter
                 else:
-                    print("  Could not move - blocked by wall")
+                    if print_details:
+                        print("  Could not move - blocked by wall")
                     stuck_count += 1
             else:
-                print("  No action decided - staying in place")
+                if print_details:
+                    print("  No action decided - staying in place")
                 stuck_count += 1
                 
                 # If stuck for 3 consecutive steps, try a random valid move
                 if stuck_count >= 3:
-                    print("  Agent stuck - trying random valid action")
+                    if print_details:
+                        print("  Agent stuck - trying random valid action")
                     possible_actions = []
                     for action in ['NORTH', 'SOUTH', 'EAST', 'WEST']:
                         new_row, new_col = self.row, self.col
@@ -401,27 +422,144 @@ class Agent:
                     if possible_actions:
                         random_action = random.choice(possible_actions)
                         if self.move(random_action):
-                            print(f"  Random move succeeded: {random_action} to ({self.row}, {self.col})")
+                            if print_details:
+                                print(f"  Random move succeeded: {random_action} to ({self.row}, {self.col})")
                             stuck_count = 0
-        
-        print("\nRun completed!")
-        print(f"Total positions visited: {len(self.position_history)}")
-        print(f"Unique positions visited: {len(self.unique_positions)}")
-        
+
+        if print_details:
+            print(f"\nRun completed after {n_steps} steps.")
+            print(f"Final position: ({self.row}, {self.col})")
+            print(f"Stuck count: {stuck_count}")
+            print(f"Position history: {self.position_history}")
+            print(f"Unique positions visited: {self.unique_positions}")
+            print(f"Total positions visited: {len(self.position_history)}")
+            print(f"Unique positions visited: {len(self.unique_positions)}")
+
     def reset_position_tracking(self):
         """Clear the position history and unique positions for a fresh run."""
         self.position_history.clear()
         self.unique_positions.clear()
-        
+        self.rule_activation_counts.clear()
+
     def get_score(self):
         """Return the number of unique positions visited."""
         return len(self.unique_positions)
 
     def print_agent_state(self):
         print(f"Agent State: Position=({self.row}, {self.col}), Rules={len(self.ensemble)}")
+        print(f"Activated rules: {len(self.rule_activation_counts)}")
 
     def get_state(self):
         return {'row': self.row, 'col': self.col, 'direction': self.direction}
+
+
+class Swarm:
+    def __init__(self, maze, num_agents=5):
+        self.maze = maze
+        self.agents = [Agent(maze, maze.start_pos[0], maze.start_pos[1]) for _ in range(num_agents)]
+        self.scores = []
+
+    def run(self, n_steps=10):
+        print(f"\n=== Swarm Run: {len(self.agents)} Agents, {n_steps} Steps ===")
+        for idx, agent in enumerate(self.agents):
+            agent.reset_position_tracking()
+            agent.position_history.append((agent.row, agent.col))
+            agent.unique_positions.add((agent.row, agent.col))
+            print(f"\nAgent {idx+1} initial state:")
+            agent.print_agent_state()
+            agent.run(n_steps=n_steps)
+            self.scores.append(agent.get_score())
+            print(f"Agent {idx+1} score: {agent.get_score()}")
+        print(f"\nSwarm average score: {sum(self.scores)/len(self.scores):.2f}")
+        print(f"Swarm best score: {max(self.scores)}")
+        print(f"Swarm scores: {self.scores}")
+
+        # Show unique rule count after Swarm run
+        print(f"Unique rules in swarm after run: {self.count_unique_rules()}")
+
+    def evaluate(self):
+        """Evaluate all agents and return stats."""
+        self.scores = [agent.get_score() for agent in self.agents]
+        avg_score = sum(self.scores) / len(self.scores) if self.scores else 0
+        best_score = max(self.scores) if self.scores else 0
+        print(f"\nSwarm Evaluation:")
+        print(f"  Average score: {avg_score:.2f}")
+        print(f"  Best score: {best_score}")
+        print(f"  Scores: {self.scores}")
+        return {'average': avg_score, 'best': best_score, 'scores': self.scores}
+
+    def next_generation(self, elite_fraction=0.3, mutation_rate=0.1):
+        """Create the next generation: preserve elites, mutate only clones/children."""
+        self.evaluate()
+        num_elite = max(1, int(len(self.agents) * elite_fraction))
+        elite_indices = sorted(range(len(self.scores)), key=lambda i: self.scores[i], reverse=True)[:num_elite]
+        elite_agents = [self.agents[i] for i in elite_indices]
+        new_agents = []
+        # Preserve elites unchanged
+        for elite in elite_agents:
+            agent = Agent(self.maze, self.maze.start_pos[0], self.maze.start_pos[1])
+            agent.ensemble = [Rule(r.condition1_pos, r.condition1_state, r.condition2_pos, r.condition2_state, r.action) for r in elite.ensemble]
+            new_agents.append(agent)
+        # Fill rest with mutated clones/children
+        while len(new_agents) < len(self.agents):
+            parent = random.choice(elite_agents)
+            new_rules = [Rule(r.condition1_pos, r.condition1_state, r.condition2_pos, r.condition2_state, r.action) for r in parent.ensemble]
+            for rule in new_rules:
+                if random.random() < mutation_rate:
+                    rule.action = random.choice(['NORTH', 'SOUTH', 'EAST', 'WEST'])
+            agent = Agent(self.maze, self.maze.start_pos[0], self.maze.start_pos[1])
+            agent.ensemble = new_rules
+            new_agents.append(agent)
+        self.agents = new_agents
+        self.scores = []
+        print("\nNext generation created.")
+
+        # Show unique rule count after next generation
+        print(f"Unique rules in swarm after next generation: {self.count_unique_rules()}")
+
+    def count_unique_rules(self):
+        """Return the number of unique rules across all agents in the swarm."""
+        rule_set = set()
+        for agent in self.agents:
+            for rule in agent.ensemble:
+                # Use a tuple of rule attributes for uniqueness
+                rule_tuple = (rule.condition1_pos, rule.condition1_state, rule.condition2_pos, rule.condition2_state, rule.action)
+                rule_set.add(rule_tuple)
+        print(f"Total unique rules in swarm: {len(rule_set)}")
+        return len(rule_set)
+
+    def print_report(self):
+        """Print score and details for each agent in the swarm."""
+        print("\n=== Swarm Report ===")
+        # top 10 scores
+        top_scores = sorted(self.scores, reverse=True)[:10]
+        print(f"Top 10 scores in swarm: {top_scores}")
+        # bottom 10 scores
+        bottom_scores = sorted(self.scores)[:10]
+        print(f"Bottom 10 scores in swarm: {bottom_scores}")
+        print_details = False  # Set to True to print detailed agent info
+        if print_details:
+            print("\nDetailed Agent Information:")
+            for idx, agent in enumerate(self.agents):
+                print(f"Agent {idx+1}:")
+                print(f"  Score: {agent.get_score()}")
+                print(f"  Unique positions: {len(agent.unique_positions)}")
+                # print(f"  Position history: {agent.position_history}")
+                print(f"  Number of rules: {len(agent.ensemble)}")
+                print()
+
+    def plot_scores_over_generations(self, avg_scores, best_scores, filename='swarm_scores_over_generations.png'):
+        plt.figure(figsize=(10, 5))
+        plt.plot(avg_scores, label='Average Score')
+        plt.plot(best_scores, label='Best Score')
+        plt.xlabel('Generation')
+        plt.ylabel('Score')
+        plt.title('Swarm Scores Over Generations')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig('swarm_scores_over_generations.png')
+        print("Swarm scores plot saved as 'swarm_scores_over_generations.png'")
+        plt.show()
 
 
 if __name__ == "__main__":
@@ -464,3 +602,35 @@ if __name__ == "__main__":
     test_agent.reset_position_tracking()
     print(f"  Score after reset: {test_agent.get_score()}")
     print(f"  Position history after reset: {test_agent.position_history}")
+
+    # 7. Swarm test: run multiple agents in parallel
+    print("\n=== Swarm Test ===")
+    swarm = Swarm(my_maze, num_agents=15)
+    swarm.run(n_steps=50)
+
+    # 8. Swarm next generation test
+    print("\n=== Swarm Next Generation Test ===")
+    swarm.next_generation(elite_fraction=0.3, mutation_rate=0.1)
+    for idx, agent in enumerate(swarm.agents):
+        agent.run(n_steps=50)  # Run the agent before checking score
+        print(f"Agent {idx+1} rules:", len(agent.ensemble))
+        print(f"Agent {idx+1} score: {agent.get_score()}")
+
+    swarm.print_report()
+
+    # 9. Iterate multiple generations and track scores
+    print("\n=== Swarm Multi-Generation Test ===")
+    generations = 5_000
+    avg_scores = []
+    best_scores = []
+    for gen in range(generations):
+        print(f"\n--- Generation {gen + 1} ---")
+        swarm.next_generation(elite_fraction=0.3, mutation_rate=0.1)
+        swarm.run(n_steps=50)
+        swarm.print_report()
+        # Track scores for plotting
+        swarm.evaluate()
+        avg_scores.append(swarm.scores and sum(swarm.scores)/len(swarm.scores) or 0)
+        best_scores.append(swarm.scores and max(swarm.scores) or 0)
+    filename = f'swarm_scores_over_{generations}_generations.png'
+    swarm.plot_scores_over_generations(avg_scores, best_scores, filename=filename)
